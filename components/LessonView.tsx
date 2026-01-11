@@ -1,7 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { LessonContent, Subject, ClassLevel, Chapter, MCQItem, ContentType, User, SystemSettings } from '../types';
-import { ArrowLeft, Clock, AlertTriangle, ExternalLink, CheckCircle, XCircle, Trophy, BookOpen, Play, Lock, ChevronRight, ChevronLeft, Save, X, Maximize } from 'lucide-react';
+import { 
+  LessonContent, Subject, ClassLevel, Chapter, 
+  MCQItem, ContentType, User, SystemSettings 
+} from '../types';
+import { 
+  ArrowLeft, Clock, AlertTriangle, ExternalLink, CheckCircle, 
+  XCircle, Trophy, BookOpen, Play, Lock, ChevronRight, 
+  ChevronLeft, Save, X, Maximize, RotateCcw, Share2, Youtube
+} from 'lucide-react';
 import { CustomConfirm, CustomAlert } from './CustomDialogs';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -15,9 +22,9 @@ interface Props {
   loading: boolean;
   onBack: () => void;
   onMCQComplete?: (count: number, answers: Record<number, number>, usedData: MCQItem[], timeTaken: number) => void; 
-  user?: User; // Optional for non-MCQ views
+  user?: User;
   onUpdateUser?: (user: User) => void;
-  settings?: SystemSettings; // New Prop for Pricing
+  settings?: SystemSettings;
 }
 
 export const LessonView: React.FC<Props> = ({ 
@@ -32,6 +39,10 @@ export const LessonView: React.FC<Props> = ({
   onUpdateUser,
   settings
 }) => {
+  // ==========================================
+  // 1. STATES & INITIALIZATION
+  // ==========================================
+  // MCQ State Management
   const [mcqState, setMcqState] = useState<Record<number, number | null>>({});
   const [showResults, setShowResults] = useState(false); // Used to trigger Analysis Mode
   const [localMcqData, setLocalMcqData] = useState<MCQItem[]>([]);
@@ -39,20 +50,27 @@ export const LessonView: React.FC<Props> = ({
   const [analysisUnlocked, setAnalysisUnlocked] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   
-  // Full Screen Ref
-  const containerRef = useRef<HTMLDivElement>(null);
-  const toggleFullScreen = () => {
-      if (!document.fullscreenElement) {
-          containerRef.current?.requestFullscreen().catch(e => console.error(e));
-      } else {
-          document.exitFullscreen();
-      }
-  };
-
-  // TIMER STATE
+  // Timer & UI State
   const [sessionTime, setSessionTime] = useState(0); // Total seconds
+  const [batchIndex, setBatchIndex] = useState(0);
+  const BATCH_SIZE = 50; // Pagination for large question sets
+
+  // Refs for UI interactions
+  const containerRef = useRef<HTMLDivElement>(null);
   
-  // TIMER EFFECT
+  // Dialog States
+  const [alertConfig, setAlertConfig] = useState<{isOpen: boolean, message: string}>({isOpen: false, message: ''});
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean, title: string, message: string, onConfirm: () => void
+  }>({
+    isOpen: false, title: '', message: '', onConfirm: () => {}
+  });
+
+  // ==========================================
+  // 2. EFFECTS (TIMER & FULLSCREEN & SECURITY)
+  // ==========================================
+  
+  // Timer Effect - Runs only when quiz is active
   useEffect(() => {
       let interval: any;
       if (!showResults && !showSubmitModal && !showResumePrompt) {
@@ -63,102 +81,176 @@ export const LessonView: React.FC<Props> = ({
       return () => clearInterval(interval);
   }, [showResults, showSubmitModal, showResumePrompt]);
 
-  // Custom Dialog State
-  const [alertConfig, setAlertConfig] = useState<{isOpen: boolean, message: string}>({isOpen: false, message: ''});
-  const [confirmConfig, setConfirmConfig] = useState<{isOpen: boolean, title: string, message: string, onConfirm: () => void}>({isOpen: false, title: '', message: '', onConfirm: () => {}});
+  // Fullscreen Handler - Compatible with most browsers
+  const toggleFullScreen = () => {
+      if (!document.fullscreenElement) {
+          containerRef.current?.requestFullscreen().catch(err => {
+              console.error("Fullscreen Error:", err);
+              setAlertConfig({ isOpen: true, message: "Fullscreen mode not supported on this device." });
+          });
+      } else {
+          document.exitFullscreen();
+      }
+  };
 
+  // Prevent accidental back navigation during MCQ
+  useEffect(() => {
+      if (content?.type.includes('MCQ') && Object.keys(mcqState).length > 0 && !showResults) {
+          const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+              e.preventDefault();
+              e.returnValue = ''; // Standard browser prompt
+          };
+          window.addEventListener('beforeunload', handleBeforeUnload);
+          return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+      }
+  }, [mcqState, content?.type, showResults]);
+
+  // ==========================================
+  // 3. LOADING STATE RENDERER
+  // ==========================================
   if (loading) {
       return (
-          <div className="h-[70vh] flex flex-col items-center justify-center text-center p-8">
-              <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-              <h3 className="text-xl font-bold text-slate-800 animate-pulse">Loading Content...</h3>
-              <p className="text-slate-500 text-sm">Please wait while we fetch the data.</p>
+          <div className="h-[80vh] flex flex-col items-center justify-center text-center p-8 bg-white/50 backdrop-blur-sm">
+              <div className="relative w-24 h-24 mb-8">
+                  <div className="absolute inset-0 border-8 border-slate-100 rounded-full"></div>
+                  <div className="absolute inset-0 border-8 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                      <BookOpen size={24} className="text-blue-600 opacity-50" />
+                  </div>
+              </div>
+              <h3 className="text-2xl font-black text-slate-800 animate-pulse tracking-tight">Syncing Content...</h3>
+              <p className="text-slate-400 mt-2 font-medium max-w-xs mx-auto">Please wait while we prepare your high-quality learning materials.</p>
           </div>
       );
   }
 
-  // AI IMAGE NOTES VIEWER - STRICT MODE
-  if (content.type === 'NOTES_IMAGE_AI') {
-      const preventMenu = (e: React.MouseEvent | React.TouchEvent) => e.preventDefault();
+  // ==========================================
+  // 4. AI IMAGE/HTML NOTES VIEW (STRICT MODE)
+  // ==========================================
+  if (content?.type === 'NOTES_IMAGE_AI') {
+      const preventAction = (e: React.MouseEvent | React.TouchEvent) => e.preventDefault();
+      
+      // OPTION A: HTML CONTENT (Pre-rendered AI Notes)
       if (content.aiHtmlContent) {
-          const decodedContent = decodeHtml(content.aiHtmlContent);
+          const decodedHtml = decodeHtml(content.aiHtmlContent);
           return (
-              <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in">
-                  <header className="bg-white/95 backdrop-blur-md text-slate-800 p-4 absolute top-0 left-0 right-0 z-10 flex items-center justify-between border-b border-slate-100 shadow-sm">
-                      <div>
-                          <h2 className="text-sm font-bold">{content.title}</h2>
-                          <p className="text-[10px] text-teal-600 font-bold uppercase tracking-widest">AI Generated Notes</p>
+              <div className="fixed inset-0 z-50 bg-white flex flex-col overflow-hidden animate-in fade-in slide-in-from-bottom-5">
+                  <header className="bg-white/95 backdrop-blur-md border-b border-slate-100 p-4 absolute top-0 left-0 right-0 z-10 flex items-center justify-between shadow-sm">
+                      <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600 shadow-sm border border-teal-100">
+                              <BookOpen size={20} />
+                          </div>
+                          <div>
+                              <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight leading-none">{content.title}</h2>
+                              <p className="text-[10px] text-teal-600 font-bold uppercase tracking-widest mt-1">AI Master Notes</p>
+                          </div>
                       </div>
-                      <button onClick={onBack} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={20} /></button>
+                      <button onClick={onBack} className="p-3 bg-slate-50 rounded-full text-slate-400 hover:bg-slate-100 transition-all hover:text-slate-600 active:scale-95"><X size={20} /></button>
                   </header>
-                  <div className="flex-1 overflow-y-auto w-full pt-16 pb-20 px-4 md:px-8">
-                      <div className="prose prose-slate max-w-none prose-img:rounded-xl prose-img:shadow-lg prose-headings:text-slate-800 prose-a:text-blue-600 [&_a]:pointer-events-none [&_a]:cursor-text [&_a]:no-underline [&_iframe]:pointer-events-none" dangerouslySetInnerHTML={{ __html: decodedContent }} />
-                      <div className="h-10"></div>
+                  
+                  <div className="flex-1 overflow-y-auto w-full pt-20 pb-10 px-6 md:px-12 selection:bg-teal-100">
+                      <div 
+                          className="prose prose-slate max-w-none prose-img:rounded-3xl prose-img:shadow-2xl prose-headings:font-black prose-headings:text-slate-900 prose-a:text-blue-600 [&_a]:pointer-events-none [&_a]:cursor-text [&_a]:no-underline [&_iframe]:pointer-events-none prose-blockquote:border-teal-500 prose-blockquote:bg-teal-50 prose-blockquote:py-2 prose-blockquote:px-4 prose-blockquote:rounded-r-lg"
+                          dangerouslySetInnerHTML={{ __html: decodedHtml }}
+                      />
+                      <div className="h-20 flex items-center justify-center mt-10 border-t border-slate-100">
+                          <p className="text-xs font-bold text-slate-300 uppercase tracking-widest">End of AI Notes</p>
+                      </div>
                   </div>
               </div>
           );
       }
+
+      // OPTION B: IMAGE VIEWER (Standard Image Notes)
       return (
-          <div className="fixed inset-0 z-50 bg-[#111] flex flex-col animate-in fade-in" style={{ width: '100vw', height: '100vh', touchAction: 'none' }}>
-              <header className="bg-black/90 backdrop-blur-md text-white p-4 absolute top-0 left-0 right-0 z-10 flex items-center justify-between border-b border-white/10">
-                  <div>
-                      <h2 className="text-sm font-bold text-white/90">{content.title}</h2>
-                      <p className="text-[10px] text-teal-400 font-bold uppercase tracking-widest">AI Generated Notes</p>
+          <div 
+              className="fixed inset-0 z-50 bg-[#050505] flex flex-col overflow-hidden animate-in fade-in"
+              style={{ width: '100vw', height: '100vh', touchAction: 'none' }}
+          >
+              <header className="bg-black/60 backdrop-blur-2xl border-b border-white/5 p-4 absolute top-0 left-0 right-0 z-10 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                      <button onClick={onBack} className="p-2 text-white/50 hover:text-white transition-colors bg-white/5 rounded-lg"><ArrowLeft size={20} /></button>
+                      <h2 className="text-xs font-black text-white/90 uppercase tracking-[0.2em]">{content.title}</h2>
                   </div>
-                  <button onClick={onBack} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors backdrop-blur-md"><X size={20} /></button>
+                  <div className="px-3 py-1 bg-teal-500/20 rounded-full border border-teal-500/30 text-teal-400 text-[9px] font-black uppercase tracking-widest">AI Visual Mode</div>
               </header>
-              <div className="viewer" style={{ width: '100vw', height: '100vh', overflowY: 'auto', overflowX: 'hidden', touchAction: 'pan-y', background: '#111' }} onContextMenu={preventMenu}>
-                  <div className="pt-16 pb-20 w-full min-h-screen">
-                      <img src={content.content} alt="AI Notes" className="zoomed-image" loading="lazy" onContextMenu={preventMenu} draggable={false} style={{ width: '140%', marginLeft: '-20%', userSelect: 'none', pointerEvents: 'none' }} />
+              
+              <div 
+                  className="viewer w-full h-full overflow-y-auto overflow-x-hidden bg-[#050505] scrollbar-hide"
+                  style={{ touchAction: 'pan-y' }}
+                  onContextMenu={preventAction}
+              >
+                  <div className="pt-24 pb-20 w-full min-h-screen flex justify-center">
+                      <img 
+                          src={content.content} 
+                          alt="AI Study Material" 
+                          className="w-[160%] max-w-none ml-[-30%] shadow-[0_50px_100px_-20px_rgba(0,0,0,1)] rounded-sm"
+                          loading="lazy"
+                          onContextMenu={preventAction}
+                          draggable={false}
+                          style={{ 
+                              pointerEvents: 'none',
+                              userSelect: 'none',
+                              WebkitUserSelect: 'none'
+                          }}
+                      />
                   </div>
-                  <div className="h-20 w-full flex items-center justify-center bg-[#111] text-zinc-600 text-xs font-mono pb-8">-- END OF NOTES --</div>
+                  
+                  <div className="h-20 w-full flex flex-col items-center justify-center gap-2 pb-10">
+                      <div className="w-1 h-20 bg-gradient-to-b from-teal-500/50 to-transparent rounded-full"></div>
+                      <p className="text-[10px] font-mono text-zinc-800 tracking-[1em] uppercase">End of Canvas</p>
+                  </div>
               </div>
           </div>
       );
   }
 
-  if (!content || content.isComingSoon) {
-      return (
-          <div className="h-[70vh] flex flex-col items-center justify-center text-center p-8 bg-slate-50 rounded-2xl m-4 border-2 border-dashed border-slate-200">
-              <Clock size={64} className="text-orange-400 mb-4 opacity-80" />
-              <h2 className="text-2xl font-black text-slate-800 mb-2">Coming Soon</h2>
-              <p className="text-slate-600 max-w-xs mx-auto mb-6">This content is currently being prepared by the Admin.</p>
-              <button onClick={onBack} className="mt-8 text-slate-400 font-bold hover:text-slate-600">Go Back</button>
-          </div>
-      );
-  }
-
-  // --- MCQ RENDERER ---
-  if ((content.type === 'MCQ_ANALYSIS' || content.type === 'MCQ_SIMPLE') && content.mcqData) {
-      const BATCH_SIZE = 50;
-      const [batchIndex, setBatchIndex] = useState(0);
-
+  // ==========================================
+  // 5. MCQ SYSTEM (FULL LOGIC: Resume, Shuffle, Analysis)
+  // ==========================================
+  if ((content?.type === 'MCQ_ANALYSIS' || content?.type === 'MCQ_SIMPLE') && content.mcqData) {
+      
+      // --- Resume & Shuffle Logic ---
       useEffect(() => {
           if (!content.mcqData) return;
+          
+          // Case 1: Viewing History (User already attempted)
           if (content.userAnswers) {
-              setMcqState(content.userAnswers as any);
+              // @ts-ignore
+              setMcqState(content.userAnswers);
               setShowResults(true);
               setAnalysisUnlocked(true);
-              setLocalMcqData(content.mcqData);
+              setLocalMcqData(content.mcqData); // Use stored order if available, else default
               return;
           }
-          const key = `nst_mcq_progress_${chapter.id}`;
-          const saved = localStorage.getItem(key);
-          if (saved) {
+
+          // Case 2: Check LocalStorage for saved progress
+          const progressKey = `nst_mcq_progress_${chapter.id}`;
+          const savedProgress = localStorage.getItem(progressKey);
+
+          if (savedProgress) {
               setShowResumePrompt(true);
+              // Prepare a shuffled version in background in case they restart
               setLocalMcqData([...content.mcqData].sort(() => Math.random() - 0.5));
           } else {
+              // Case 3: Fresh Start (Shuffle)
               setLocalMcqData([...content.mcqData].sort(() => Math.random() - 0.5));
           }
       }, [content.mcqData, chapter.id, content.userAnswers]);
 
+      // --- Auto-Save Progress ---
       useEffect(() => {
           if (!showResults && Object.keys(mcqState).length > 0) {
               const key = `nst_mcq_progress_${chapter.id}`;
-              localStorage.setItem(key, JSON.stringify({ mcqState, batchIndex, localMcqData }));
+              localStorage.setItem(key, JSON.stringify({
+                  mcqState,
+                  batchIndex,
+                  localMcqData
+              }));
           }
       }, [mcqState, batchIndex, chapter.id, localMcqData, showResults]);
 
+      // Handlers
       const handleResume = () => {
           const key = `nst_mcq_progress_${chapter.id}`;
           const saved = localStorage.getItem(key);
@@ -186,7 +278,7 @@ export const LessonView: React.FC<Props> = ({
           setConfirmConfig({
               isOpen: true,
               title: "Restart Quiz?",
-              message: "This will shuffle questions and reset your current progress.",
+              message: "This will shuffle questions and reset your current progress. Are you sure?",
               onConfirm: () => {
                   const shuffled = [...(content.mcqData || [])].sort(() => Math.random() - 0.5);
                   setLocalMcqData(shuffled);
@@ -201,127 +293,223 @@ export const LessonView: React.FC<Props> = ({
           });
       };
 
-      const displayData = localMcqData.length > 0 ? localMcqData : (content.mcqData || []);
-      const currentBatchData = displayData.slice(batchIndex * BATCH_SIZE, (batchIndex + 1) * BATCH_SIZE);
-      const hasMore = (batchIndex + 1) * BATCH_SIZE < displayData.length;
+      const currentBatchData = localMcqData.slice(batchIndex * BATCH_SIZE, (batchIndex + 1) * BATCH_SIZE);
+      const hasMore = (batchIndex + 1) * BATCH_SIZE < localMcqData.length;
+      
+      // Score Calculation
       const score = Object.keys(mcqState).reduce((acc, key) => {
           const qIdx = parseInt(key);
-          return acc + (mcqState[qIdx] === displayData[qIdx].correctAnswer ? 1 : 0);
+          return acc + (mcqState[qIdx] === localMcqData[qIdx].correctAnswer ? 1 : 0);
       }, 0);
       const currentCorrect = score;
       const attemptedCount = Object.keys(mcqState).length;
-      const minRequired = Math.min(50, displayData.length);
+      const minRequired = Math.min(50, localMcqData.length);
       const canSubmit = attemptedCount >= minRequired;
-      const handleSubmitRequest = () => setShowSubmitModal(true);
+
       const handleConfirmSubmit = () => {
           setShowSubmitModal(false);
-          localStorage.removeItem(`nst_mcq_progress_${chapter.id}`);
-          if (onMCQComplete) onMCQComplete(score, mcqState as any, displayData, sessionTime);
-      };
-
-      const handleNextPage = () => {
-          setBatchIndex(prev => prev + 1);
-          document.querySelector('.mcq-container')?.scrollTo(0, 0);
-      };
-
-      const handlePrevPage = () => {
-          if (batchIndex > 0) {
-              setBatchIndex(prev => prev - 1);
-              document.querySelector('.mcq-container')?.scrollTo(0, 0);
-          }
+          const key = `nst_mcq_progress_${chapter.id}`;
+          localStorage.removeItem(key);
+          if (onMCQComplete) onMCQComplete(score, mcqState as any, localMcqData, sessionTime);
       };
 
       return (
           <div className="flex flex-col h-full bg-slate-50 animate-in fade-in relative">
+               {/* Global Overlays */}
                <CustomAlert isOpen={alertConfig.isOpen} message={alertConfig.message} type="ERROR" onClose={() => setAlertConfig({...alertConfig, isOpen: false})} />
                <CustomConfirm isOpen={confirmConfig.isOpen} title={confirmConfig.title} message={confirmConfig.message} onConfirm={confirmConfig.onConfirm} onCancel={() => setConfirmConfig({...confirmConfig, isOpen: false})} />
+
+               {/* Resume Prompt Modal */}
                {showResumePrompt && !showResults && (
                    <div className="absolute inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-                       <div className="bg-white rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl">
-                           <h3 className="text-xl font-black text-slate-800 mb-2">Resume Session?</h3>
-                           <p className="text-slate-500 text-sm mb-6">You have a saved session for this chapter.</p>
-                           <div className="flex gap-3">
-                               <button onClick={handleRestart} className="flex-1 py-3 border border-slate-200 text-slate-600 font-bold rounded-xl">Restart</button>
-                               <button onClick={handleResume} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg">Resume</button>
+                       <div className="bg-white rounded-[2rem] p-8 w-full max-w-sm text-center shadow-2xl scale-in-center">
+                           <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6 rotate-3 shadow-sm">
+                               <Clock size={32} />
+                           </div>
+                           <h3 className="text-2xl font-black text-slate-800 mb-2">Resume Session?</h3>
+                           <p className="text-slate-500 text-sm mb-8 font-medium">We found an unfinished test. Would you like to continue where you left off?</p>
+                           <div className="flex flex-col gap-3">
+                               <button onClick={handleResume} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl shadow-lg shadow-blue-200 active:scale-95 transition-all">RESUME PROGRESS</button>
+                               <button onClick={handleRestart} className="w-full py-4 bg-white border-2 border-slate-100 text-slate-400 font-bold rounded-2xl hover:bg-slate-50 transition-all">START FRESH</button>
                            </div>
                        </div>
                    </div>
                )}
+
+               {/* Submit Confirmation Modal */}
                {showSubmitModal && (
                    <div className="fixed inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex items-end justify-center sm:items-center p-4">
-                       <div className="bg-white rounded-t-3xl sm:rounded-2xl p-6 w-full max-w-sm text-center shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in mb-0 sm:mb-auto">
-                           <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
-                           <Trophy size={48} className="mx-auto text-yellow-400 mb-4" />
-                           <h3 className="text-xl font-black text-slate-800 mb-2">Submit Test?</h3>
-                           <p className="text-slate-500 text-sm mb-6">You have answered {Object.keys(mcqState).length} out of {displayData.length} questions.</p>
+                       <div className="bg-white rounded-[2.5rem] p-8 w-full max-w-sm text-center shadow-2xl animate-in slide-in-from-bottom-10 sm:zoom-in">
+                           <div className="w-20 h-20 bg-yellow-50 text-yellow-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                               <Trophy size={40} className="animate-bounce" />
+                           </div>
+                           <h3 className="text-2xl font-black text-slate-800 mb-2">Submit Test?</h3>
+                           <p className="text-slate-500 text-sm mb-8 font-medium">
+                               You have answered <span className="text-slate-900 font-black">{attemptedCount}</span> questions. 
+                               <br/>Confirm submission to generate your report.
+                           </p>
                            <div className="flex gap-3">
-                               <button onClick={() => setShowSubmitModal(false)} className="flex-1 py-3 border border-slate-200 text-slate-600 font-bold rounded-xl">Cancel</button>
-                               <button onClick={handleConfirmSubmit} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-lg">Yes, Submit</button>
+                               <button onClick={() => setShowSubmitModal(false)} className="flex-1 py-4 border-2 border-slate-100 text-slate-500 font-bold rounded-2xl hover:bg-slate-50">Not Yet</button>
+                               <button onClick={handleConfirmSubmit} className="flex-1 py-4 bg-slate-900 text-white font-bold rounded-2xl shadow-xl active:scale-95">Yes, Submit</button>
                            </div>
                        </div>
                    </div>
                )}
+
+               {/* MCQ Header */}
                <div className="flex items-center justify-between p-4 bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
                    <div className="flex gap-2">
-                       <button onClick={onBack} className="flex items-center gap-2 text-slate-600 font-bold text-sm bg-slate-100 px-3 py-2 rounded-lg hover:bg-slate-200 transition-colors"><ArrowLeft size={16} /> Exit</button>
-                       {!showResults && <button onClick={handleRecreate} className="flex items-center gap-2 text-purple-600 font-bold text-xs bg-purple-50 border border-purple-100 px-3 py-2 rounded-lg hover:bg-purple-100 transition-colors">Re-create MCQ</button>}
+                       <button onClick={onBack} className="flex items-center gap-2 text-slate-600 font-bold text-sm bg-slate-100 px-4 py-2.5 rounded-xl hover:bg-slate-200 transition-colors active:scale-95">
+                           <ArrowLeft size={18} /> Exit
+                       </button>
+                       {!showResults && (
+                           <button onClick={handleRecreate} className="flex items-center gap-2 text-purple-600 font-bold text-xs bg-purple-50 border border-purple-100 px-4 py-2.5 rounded-xl hover:bg-purple-100 transition-colors active:scale-95">
+                               <RotateCcw size={14} /> Re-create
+                           </button>
+                       )}
                    </div>
                    <div className="text-right">
-                       <h3 className="font-bold text-slate-800 text-sm">MCQ Test</h3>
-                       {showResults ? <span className="text-xs font-bold text-green-600">Analysis Mode • Page {batchIndex + 1}</span> : <div className="flex flex-col items-end"><div className="flex gap-3 text-xs font-bold mb-1"><span className="text-slate-500 flex items-center gap-1"><Clock size={12}/> {Math.floor(sessionTime / 60)}:{String(sessionTime % 60).padStart(2, '0')}</span><span className="text-green-600 flex items-center gap-1"><CheckCircle size={12}/> {currentCorrect}</span></div><span className="text-xs text-slate-400">{Object.keys(mcqState).length}/{displayData.length} Attempted</span></div>}
+                       <h3 className="font-black text-slate-800 text-sm uppercase tracking-tighter">MCQ Test</h3>
+                       {showResults ? (
+                           <span className="text-xs font-bold text-green-600 flex items-center justify-end gap-1"><CheckCircle size={12}/> Analysis Mode</span>
+                       ) : (
+                           <div className="flex flex-col items-end">
+                               <div className="flex gap-3 text-xs font-bold mb-1">
+                                   <span className="text-slate-500 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-md"><Clock size={12}/> {Math.floor(sessionTime / 60)}:{String(sessionTime % 60).padStart(2, '0')}</span>
+                                   <span className="text-green-600 flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-md"><CheckCircle size={12}/> {currentCorrect}</span>
+                               </div>
+                               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">{attemptedCount}/{localMcqData.length} Attempted</span>
+                           </div>
+                       )}
                    </div>
                </div>
-               <div className="flex-1 overflow-y-auto p-4 space-y-6 max-w-3xl mx-auto w-full pb-20 mcq-container">
+               
+               {/* Question List */}
+               <div className="flex-1 overflow-y-auto p-4 space-y-6 max-w-3xl mx-auto w-full pb-32 mcq-container scroll-smooth">
                    {currentBatchData.map((q, localIdx) => {
                        const idx = (batchIndex * BATCH_SIZE) + localIdx;
                        const userAnswer = mcqState[idx];
                        const isAnswered = userAnswer !== undefined && userAnswer !== null;
                        const isCorrect = userAnswer === q.correctAnswer;
+                       
                        return (
-                           <div key={idx} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm transition-all hover:shadow-md">
-                               <h4 className="font-bold text-slate-800 mb-4 flex gap-3 leading-relaxed"><span className="bg-blue-100 text-blue-700 w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0 font-bold mt-0.5">{idx + 1}</span>{q.question}</h4>
-                               <div className="space-y-2">
+                           <div key={idx} className={`bg-white p-6 rounded-[1.5rem] border-2 transition-all duration-300 ${isAnswered ? 'border-blue-100 shadow-lg shadow-blue-50' : 'border-slate-100 shadow-sm'}`}>
+                               <h4 className="font-bold text-slate-800 mb-6 flex gap-4 leading-relaxed text-lg">
+                                   <span className="bg-slate-900 text-white w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0 font-black mt-0.5 shadow-md">{idx + 1}</span>
+                                   {q.question}
+                               </h4>
+                               <div className="space-y-3">
                                    {q.options.map((opt, oIdx) => {
-                                       let btnClass = "w-full text-left p-3 rounded-xl border transition-all text-sm font-medium relative overflow-hidden ";
+                                       let btnClass = "w-full text-left p-4 rounded-2xl border-2 transition-all text-sm font-bold relative overflow-hidden ";
+                                       
+                                       // ANALYSIS STATE
                                        if (showResults && analysisUnlocked) {
-                                           if (oIdx === q.correctAnswer) btnClass += "bg-green-100 border-green-300 text-green-800";
-                                           else if (userAnswer === oIdx) btnClass += "bg-red-100 border-red-300 text-red-800";
-                                           else btnClass += "bg-slate-50 border-slate-100 opacity-60";
-                                       } else if (isAnswered) {
-                                            if (userAnswer === oIdx) btnClass += "bg-blue-100 border-blue-300 text-blue-800";
-                                            else btnClass += "bg-slate-50 border-slate-100 opacity-60";
-                                       } else { btnClass += "bg-white border-slate-200 hover:bg-slate-50 hover:border-blue-200"; }
+                                           if (oIdx === q.correctAnswer) btnClass += "bg-green-50 border-green-500 text-green-700 shadow-sm";
+                                           else if (userAnswer === oIdx) btnClass += "bg-red-50 border-red-500 text-red-700 shadow-sm";
+                                           else btnClass += "bg-slate-50 border-slate-100 opacity-40";
+                                       } 
+                                       // INTERACTIVE STATE
+                                       else if (isAnswered) {
+                                            if (userAnswer === oIdx) btnClass += "bg-blue-600 border-blue-600 text-white shadow-xl scale-[1.02] z-10";
+                                            else btnClass += "bg-slate-50 border-slate-100 opacity-50 grayscale";
+                                       } else {
+                                           btnClass += "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300";
+                                       }
+
                                        return (
-                                           <button key={oIdx} disabled={isAnswered || showResults} onClick={() => setMcqState(prev => ({ ...prev, [idx]: oIdx }))} className={btnClass}>
-                                               <span className="relative z-10 flex justify-between items-center">{opt}
-                                                   {showResults && analysisUnlocked && oIdx === q.correctAnswer && <CheckCircle size={16} className="text-green-600" />}
-                                                   {showResults && analysisUnlocked && userAnswer === oIdx && userAnswer !== q.correctAnswer && <XCircle size={16} className="text-red-500" />}
-                                                   {!showResults && isAnswered && userAnswer === oIdx && <CheckCircle size={16} className="text-blue-600" />}
+                                           <button 
+                                               key={oIdx}
+                                               disabled={isAnswered || showResults} 
+                                               onClick={() => setMcqState(prev => ({ ...prev, [idx]: oIdx }))}
+                                               className={btnClass}
+                                           >
+                                               <span className="relative z-10 flex justify-between items-center">
+                                                   {opt}
+                                                   {showResults && analysisUnlocked && oIdx === q.correctAnswer && <CheckCircle size={18} className="text-green-600" />}
+                                                   {showResults && analysisUnlocked && userAnswer === oIdx && userAnswer !== q.correctAnswer && <XCircle size={18} className="text-red-500" />}
+                                                   
+                                                   {!showResults && isAnswered && userAnswer === oIdx && <CheckCircle size={18} className="text-white" />}
                                                </span>
                                            </button>
                                        );
                                    })}
                                </div>
+                               
+                               {/* Explanation Box */}
                                {showResults && analysisUnlocked && (
-                                   <div className="mt-4 pt-4 border-t border-slate-100 animate-in slide-in-from-top-2">
-                                       <div className={`flex items-center gap-2 text-sm font-bold mb-1 ${isCorrect ? 'text-green-600' : 'text-red-500'}`}>{isCorrect ? <CheckCircle size={16} /> : <XCircle size={16} />}{isCorrect ? 'Correct Answer' : 'Incorrect'}</div>
-                                       {q.explanation && q.explanation !== "Answer Key Provided" && <p className="text-slate-600 text-sm bg-slate-50 p-3 rounded-lg border border-slate-200 mt-2"><span className="font-bold text-slate-800 block text-xs uppercase mb-1">Explanation:</span>{q.explanation}</p>}
+                                   <div className="mt-6 pt-6 border-t-2 border-dashed border-slate-100 animate-in slide-in-from-top-4">
+                                       <div className={`flex items-center gap-2 text-xs font-black uppercase tracking-widest mb-3 ${isCorrect ? 'text-green-600' : 'text-red-500'}`}>
+                                           {isCorrect ? <CheckCircle size={16} /> : <XCircle size={16} />}
+                                           {isCorrect ? 'Correct Answer' : 'Incorrect Answer'}
+                                       </div>
+                                       {q.explanation && q.explanation !== "Answer Key Provided" && (
+                                            <div className="text-slate-600 text-sm bg-slate-50 p-5 rounded-2xl border border-slate-100 leading-relaxed">
+                                                <span className="font-black text-slate-800 block text-[10px] uppercase mb-2 tracking-widest">Logic & Reasoning:</span>
+                                                {q.explanation}
+                                            </div>
+                                       )}
                                    </div>
                                )}
                            </div>
                        );
                    })}
                </div>
-               <div className="p-4 bg-white border-t border-slate-200 sticky bottom-0 z-[60] grid grid-cols-3 gap-2 items-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-                   <div className="flex justify-start">{batchIndex > 0 && <button onClick={handlePrevPage} className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 px-4 rounded-xl transition-all active:scale-95 flex items-center gap-1"><ChevronLeft size={18} /> Prev</button>}</div>
-                   <div className="flex justify-center">{!showResults && <div className="flex flex-col items-center w-full"><button onClick={handleSubmitRequest} disabled={!canSubmit} className="bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-300 disabled:cursor-not-allowed font-bold py-3 px-4 rounded-xl transition-all active:scale-95 flex items-center gap-1 w-full justify-center"><Trophy size={18} /> Submit</button>{!canSubmit && <span className="text-[9px] text-slate-400 mt-1 font-medium whitespace-nowrap">Min {minRequired}</span>}</div>}</div>
-                   <div className="flex justify-end">{hasMore && <button onClick={handleNextPage} disabled={!showResults && currentBatchData.some((_, i) => mcqState[(batchIndex * BATCH_SIZE) + i] === undefined)} className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-all active:scale-95 flex items-center gap-1">Next <ChevronRight size={18} /></button>}</div>
+
+               {/* Bottom Navigation Bar */}
+               <div className="p-4 bg-white/90 backdrop-blur-xl border-t border-slate-200 sticky bottom-0 z-[60] grid grid-cols-3 gap-3 items-center shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.1)]">
+                   <div className="flex justify-start">
+                       {batchIndex > 0 && (
+                           <button 
+                               onClick={() => {
+                                   setBatchIndex(prev => prev - 1);
+                                   document.querySelector('.mcq-container')?.scrollTo(0,0);
+                               }}
+                               className="bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3.5 px-5 rounded-2xl transition-all active:scale-95 flex items-center gap-2"
+                           >
+                               <ChevronLeft size={20} /> <span className="hidden sm:inline">Prev</span>
+                           </button>
+                       )}
+                   </div>
+
+                   <div className="flex justify-center w-full">
+                       {!showResults && (
+                           <div className="flex flex-col items-center w-full">
+                               <button 
+                                   onClick={handleSubmitRequest}
+                                   disabled={!canSubmit} 
+                                   className="bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed font-black py-3.5 px-8 rounded-2xl transition-all active:scale-95 flex items-center justify-center gap-2 w-full shadow-lg shadow-blue-200 disabled:shadow-none"
+                               >
+                                   <Trophy size={20} /> SUBMIT
+                               </button>
+                               {!canSubmit && (
+                                   <span className="text-[9px] text-slate-400 mt-1.5 font-bold uppercase tracking-wider">Min {minRequired} Required</span>
+                               )}
+                           </div>
+                       )}
+                   </div>
+
+                   <div className="flex justify-end">
+                       {hasMore && (
+                           <button 
+                               onClick={() => {
+                                   setBatchIndex(prev => prev + 1);
+                                   document.querySelector('.mcq-container')?.scrollTo(0,0);
+                               }}
+                               disabled={!showResults && currentBatchData.some((_, i) => mcqState[(batchIndex * BATCH_SIZE) + i] === undefined)}
+                               className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white font-bold py-3.5 px-5 rounded-2xl shadow-xl transition-all active:scale-95 flex items-center gap-2"
+                           >
+                               <span className="hidden sm:inline">Next</span> <ChevronRight size={20} />
+                           </button>
+                       )}
+                   </div>
                </div>
           </div>
       );
   }
 
-  // --- VIDEO RENDERER (Force Patched) ---
+  // ==========================================
+  // 6. VIDEO RENDERER (TRANSPARENT REDIRECT & TOUCH BLOCK)
+  // ==========================================
   if ((content.type === 'PDF_VIEWER' || content.type === 'VIDEO_LECTURE') && (content.content.includes('youtube.com') || content.content.includes('youtu.be') || content.content.includes('drive.google.com/file') || content.content.includes('.mp4') || (content.videoPlaylist && content.videoPlaylist.length > 0))) {
       const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
       const playlist = content.videoPlaylist && content.videoPlaylist.length > 0 
@@ -331,6 +519,7 @@ export const LessonView: React.FC<Props> = ({
       const currentVideo = playlist[currentVideoIndex];
       let embedUrl = currentVideo.url;
       
+      // Formatting URL for Embed
       if (embedUrl.includes('youtube.com/watch')) {
           const videoId = new URL(embedUrl).searchParams.get('v');
           embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
@@ -342,72 +531,96 @@ export const LessonView: React.FC<Props> = ({
           embedUrl = `https://drive.google.com/file/d/${fileId}/preview`;
       }
 
-      // Force high security parameters
-      const secureSrc = `${embedUrl}&modestbranding=1&rel=0&iv_load_policy=3&controls=1&disablekb=1&showinfo=0`;
+      // STRICT PARAMETERS FOR YOUTUBE
+      const secureSrc = `${embedUrl}&modestbranding=1&rel=0&iv_load_policy=3&controls=1&disablekb=1&showinfo=0&fs=0`;
+
+      // 🔥 TOUCH BLOCKER FUNCTION
+      const blockTouch = (e: any) => {
+          e.preventDefault();
+          e.stopPropagation();
+          return false;
+      };
       
       return (
-          <div className="flex flex-col h-[calc(100vh-80px)] bg-slate-900">
-              <div className="flex items-center justify-between p-3 bg-slate-800 border-b border-slate-700 shadow-sm relative z-[99999]">
-                   <button onClick={onBack} className="flex items-center gap-2 text-slate-300 font-bold text-sm hover:text-white"><ArrowLeft size={18} /> Back</button>
-                   <h3 className="font-bold text-white text-sm truncate max-w-[200px]">{currentVideo.title}</h3>
+          <div className="flex flex-col h-[calc(100vh-80px)] bg-[#030712] animate-in fade-in">
+              <div className="flex items-center justify-between p-4 bg-slate-900 border-b border-white/10 shadow-lg relative z-[10000]">
+                   <button onClick={onBack} className="flex items-center gap-2 text-slate-400 font-bold text-sm hover:text-white transition-colors group">
+                       <ArrowLeft size={20} className="group-active:-translate-x-1 transition-transform" /> Back
+                   </button>
+                   <div className="text-center">
+                       <h3 className="font-black text-white text-xs sm:text-sm truncate max-w-[200px] uppercase tracking-tighter">{currentVideo.title}</h3>
+                       <p className="text-[9px] text-blue-500 font-bold uppercase tracking-widest mt-0.5">Secure Player</p>
+                   </div>
                    <div className="w-10"></div>
               </div>
               
               <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
-                  <div ref={containerRef} className="flex-1 bg-black relative group overflow-hidden">
+                  <div ref={containerRef} className="flex-1 bg-black relative group overflow-hidden select-none">
                       
-                      {/* 🔴 BLOCKER 1: TOP-RIGHT (High Z-Index) */}
+                      {/* 🔴 LOCK 1: TOP-RIGHT (SHARE BUTTON BLOCKER) */}
+                      {/* Blocks both Touch and Click */}
                       <div
-                        className="absolute pointer-events-auto bg-transparent"
+                        className="absolute bg-transparent"
                         style={{
-                          top: 0, right: 0, width: '150px', height: '100px', zIndex: 9999
+                          top: 0,
+                          right: 0,
+                          width: '180px',
+                          height: '100px',
+                          zIndex: 9999, // FORCED ON TOP
+                          touchAction: 'none' // DISALLOWS SCROLL/ZOOM
                         }}
+                        onClick={blockTouch}
+                        onMouseDown={blockTouch}
+                        onTouchStart={blockTouch} // CRITICAL FOR MOBILE
+                        onContextMenu={(e) => e.preventDefault()}
                       />
 
-                      {/* 🔗 BLOCKER 2: CLICKABLE REDIRECT (Logo Mask) */}
+                      {/* 🔗 LOCK 2: TRANSPARENT REDIRECT OVER YOUTUBE LOGO */}
+                      {/* Allows Touch (to redirect), Covers Logo */}
                       <a
                          href="https://youtube.com/@ehsansir2.0?si=80l2sFqj85RnGulA"
                          target="_blank"
                          rel="noopener noreferrer"
-                         className="absolute pointer-events-auto flex flex-col items-center justify-center no-underline border-l border-t border-white/10"
+                         className="absolute z-[9999] bottom-0 right-0 w-[170px] h-[65px]"
                          style={{
-                           bottom: 0, right: 0, width: '160px', height: '65px', 
-                           backgroundColor: '#000', // Solid Black
-                           zIndex: 9999, // On Top of Iframe
-                           cursor: 'pointer'
+                           background: 'transparent', // INVISIBLE
+                           cursor: 'pointer',
+                           touchAction: 'auto' // ALLOWS TAP TO REDIRECT
                          }}
+                         title="Visit Official Channel"
                       >
-                         <span className="text-[10px] text-blue-400 font-black tracking-widest uppercase">NSTA OFFICIAL</span>
-                         <span className="text-[8px] text-slate-400 font-bold mt-1">@ehsansir2.0</span>
-                         <div className="flex items-center gap-1 mt-1">
-                            <div className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse"></div>
-                            <span className="text-[8px] text-white/60 font-bold">SUBSCRIBE</span>
-                         </div>
+                         {/* Empty Transparent Box */}
                       </a>
 
-                      {/* 🔒 BLOCKER 3: BOTTOM-LEFT */}
+                      {/* 🔒 LOCK 3: BOTTOM-LEFT (CONTROLS BLOCKER) */}
                       <div
-                        className="absolute pointer-events-auto bg-transparent"
+                        className="absolute bg-transparent"
                         style={{
-                          bottom: 0, left: 0, width: '100px', height: '80px', zIndex: 9999
+                          bottom: 0,
+                          left: 0,
+                          width: '100px',
+                          height: '80px',
+                          zIndex: 9999,
+                          touchAction: 'none'
                         }}
+                        onClick={blockTouch}
+                        onTouchStart={blockTouch}
                       />
 
-                      {/* 🔘 FULLSCREEN BUTTON (Highest Z-Index) */}
+                      {/* 🔘 FULL SCREEN BUTTON (HIGHEST Z-INDEX) */}
                       <button 
                           onClick={toggleFullScreen} 
-                          className="absolute top-4 left-4 p-2 rounded-full text-white/80 hover:text-white bg-black/50 backdrop-blur-sm border border-white/10"
-                          style={{ zIndex: 10000 }}
+                          className="absolute top-6 left-6 z-[10000] bg-black/60 text-white/90 p-3 rounded-2xl backdrop-blur-md border border-white/10 hover:bg-black hover:text-white transition-all shadow-xl active:scale-90"
                       >
-                          <Maximize size={20} />
+                          <Maximize size={22} />
                       </button>
 
-                      {/* 📺 IFRAME (Lowest Z-Index) */}
+                      {/* 📺 IFRAME (LOWEST Z-INDEX) */}
                       <iframe 
                            key={secureSrc}
                            src={secureSrc}
                            className="w-full h-full border-0 relative"
-                           style={{ zIndex: 1 }} 
+                           style={{ zIndex: 1 }}
                            allow="autoplay; fullscreen; picture-in-picture"
                            allowFullScreen
                            sandbox="allow-scripts allow-same-origin allow-presentation"
@@ -415,15 +628,34 @@ export const LessonView: React.FC<Props> = ({
                        />
                   </div>
                   
+                  {/* Playlist Sidebar */}
                   {playlist.length > 1 && (
-                      <div className="w-full md:w-80 bg-slate-900 border-l border-slate-800 flex flex-col z-[50]">
-                          <div className="p-3 bg-slate-800 font-bold text-white text-xs uppercase tracking-widest border-b border-slate-700">Up Next ({currentVideoIndex + 1}/{playlist.length})</div>
-                          <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                      <div className="w-full md:w-85 bg-slate-950 border-l border-white/5 flex flex-col shadow-2xl z-[50]">
+                          <div className="p-4 bg-slate-950 border-b border-white/5">
+                              <h4 className="font-black text-slate-500 text-[10px] uppercase tracking-[0.3em]">Course Playlist</h4>
+                          </div>
+                          <div className="flex-1 overflow-y-auto p-3 space-y-3">
                               {playlist.map((vid, idx) => (
-                                  <button key={idx} onClick={() => setCurrentVideoIndex(idx)} className={`w-full p-3 rounded-lg flex gap-3 items-center text-left transition-all ${idx === currentVideoIndex ? 'bg-blue-600 text-white shadow-lg' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}>
-                                      <div className="text-xs font-bold opacity-50">{idx + 1}</div>
-                                      <div className="flex-1 truncate"><p className="font-bold text-xs truncate">{vid.title}</p></div>
-                                      {idx === currentVideoIndex && <Play size={12} fill="currentColor" />}
+                                  <button 
+                                      key={idx}
+                                      onClick={() => setCurrentVideoIndex(idx)}
+                                      className={`w-full p-4 rounded-2xl flex gap-4 items-center text-left transition-all duration-300 border ${
+                                          idx === currentVideoIndex 
+                                          ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-900/20' 
+                                          : 'bg-slate-900/50 border-transparent text-slate-500 hover:bg-slate-900 hover:text-slate-300'
+                                      }`}
+                                  >
+                                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black shrink-0 ${idx === currentVideoIndex ? 'bg-white/20 text-white' : 'bg-slate-800'}`}>
+                                          {idx + 1}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                          <p className="font-bold text-xs truncate uppercase tracking-tight">{vid.title}</p>
+                                          <div className="flex items-center gap-1.5 mt-1">
+                                              <div className={`w-1 h-1 rounded-full ${idx === currentVideoIndex ? 'bg-white' : 'bg-slate-600'}`}></div>
+                                              <p className="text-[9px] opacity-60 font-medium">Video Lecture</p>
+                                          </div>
+                                      </div>
+                                      {idx === currentVideoIndex && <Play size={14} fill="currentColor" />}
                                   </button>
                               ))}
                           </div>
@@ -434,68 +666,138 @@ export const LessonView: React.FC<Props> = ({
       );
   }
   
-  // --- PDF / EXTERNAL LINK RENDERER ---
+  // ==========================================
+  // 7. PDF / EXTERNAL LINK RENDERER
+  // ==========================================
   if (content.type === 'PDF_VIEWER' || content.type === 'PDF_FREE' || content.type === 'PDF_PREMIUM') {
       const isPdf = content.content.toLowerCase().endsWith('.pdf') || content.content.includes('drive.google.com') || content.content.includes('docs.google.com');
+      
       return (
-          <div className="flex flex-col h-[calc(100vh-80px)] bg-slate-100">
-              <div className="flex items-center justify-between p-3 bg-white border-b border-slate-200 shadow-sm">
-                   <button onClick={onBack} className="flex items-center gap-2 text-slate-600 font-bold text-sm hover:text-slate-900"><ArrowLeft size={18} /> Back</button>
-                   <h3 className="font-bold text-slate-800 text-sm truncate max-w-[200px]">{chapter.title}</h3>
-                   <button onClick={toggleFullScreen} className="p-2 hover:bg-slate-100 rounded-full text-slate-500"><Maximize size={20} /></button>
+          <div className="flex flex-col h-[calc(100vh-80px)] bg-slate-50">
+              <div className="flex items-center justify-between p-4 bg-white border-b border-slate-200 shadow-sm">
+                   <button onClick={onBack} className="flex items-center gap-2 text-slate-500 font-bold text-sm hover:text-slate-900 transition-colors">
+                       <ArrowLeft size={20} />
+                   </button>
+                   <h3 className="font-black text-slate-800 text-sm truncate max-w-[200px] uppercase tracking-tighter">{chapter.title}</h3>
+                   <button onClick={toggleFullScreen} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors">
+                       <Maximize size={20} />
+                   </button>
               </div>
-              <div ref={containerRef} className="flex-1 w-full bg-white relative overflow-hidden">
-                  {isPdf ? (
-                     <div className="relative w-full h-full">
-                        <iframe src={content.content.replace('/view', '/preview').replace('/edit', '/preview')} className="w-full h-full border-0" allowFullScreen sandbox="allow-scripts allow-same-origin" title="PDF Viewer" />
-                        <div className="absolute top-0 right-0 w-20 h-20 z-10 bg-transparent"></div>
-                     </div>
-                  ) : (
-                      <div className="flex flex-col items-center justify-center h-full p-8 text-center"><ExternalLink size={48} className="text-slate-400 mb-4" /><h3 className="text-xl font-bold text-slate-700 mb-2">External Content</h3><p className="text-slate-500 mb-6 max-w-md">This content is hosted externally and cannot be embedded.</p></div>
-                  )}
+              
+              <div ref={containerRef} className="flex-1 w-full bg-slate-200/50 p-4 md:p-8 relative overflow-hidden">
+                  <div className="w-full h-full bg-white rounded-[2rem] shadow-xl overflow-hidden relative border border-slate-200">
+                      {isPdf ? (
+                         <div className="relative w-full h-full group">
+                            <iframe 
+                                 src={content.content.replace('/view', '/preview').replace('/edit', '/preview')} 
+                                 className="w-full h-full border-0" 
+                                 allowFullScreen
+                                 sandbox="allow-scripts allow-same-origin"
+                                 title="PDF Viewer"
+                             />
+                             {/* TOOLBAR MASK: Prevents direct interaction with top-right Google controls */}
+                             <div className="absolute top-0 right-0 w-32 h-24 z-10 bg-transparent pointer-events-auto"></div>
+                         </div>
+                      ) : (
+                          <div className="flex flex-col items-center justify-center h-full p-8 text-center bg-white">
+                              <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-6">
+                                  <ExternalLink size={32} className="text-slate-400" />
+                              </div>
+                              <h3 className="text-2xl font-black text-slate-800 mb-2">External Content</h3>
+                              <p className="text-slate-500 mb-8 max-w-md font-medium leading-relaxed">
+                                  This content is hosted securely on an external platform and cannot be directly embedded here.
+                              </p>
+                              <a 
+                                  href={content.content}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="bg-slate-900 text-white font-bold py-4 px-8 rounded-2xl shadow-lg hover:bg-blue-600 transition-all active:scale-95"
+                              >
+                                  Open in Browser
+                              </a>
+                          </div>
+                      )}
+                  </div>
               </div>
           </div>
       );
   }
 
-  // --- HTML NOTES RENDERER ---
+  // ==========================================
+  // 8. HTML NOTES RENDERER
+  // ==========================================
   if (content.type === 'NOTES_HTML_FREE' || content.type === 'NOTES_HTML_PREMIUM') {
       const decodedContent = decodeHtml(content.content);
       return (
         <div className="bg-white min-h-screen pb-20 animate-in fade-in">
            <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 py-3 flex items-center justify-between shadow-sm">
-               <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:text-slate-900 transition-colors"><ArrowLeft size={20} /></button>
-               <div className="text-center"><h3 className="font-bold text-slate-800 text-sm leading-tight">{chapter.title}</h3><p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{content.type === 'NOTES_HTML_PREMIUM' ? 'Premium Notes' : 'Free Notes'}</p></div>
+               <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:text-slate-900 transition-colors">
+                   <ArrowLeft size={20} />
+               </button>
+               <div className="text-center">
+                   <h3 className="font-black text-slate-800 text-sm leading-tight">{chapter.title}</h3>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">{content.type === 'NOTES_HTML_PREMIUM' ? 'Premium Notes' : 'Free Notes'}</p>
+               </div>
                <div className="w-8"></div>
            </div>
-           <div className="max-w-3xl mx-auto p-6 md:p-10">
-               <div className="prose prose-slate max-w-none prose-img:rounded-xl prose-headings:text-slate-800 prose-a:text-blue-600 [&_a]:pointer-events-none [&_a]:cursor-text [&_a]:no-underline [&_iframe]:pointer-events-none" dangerouslySetInnerHTML={{ __html: decodedContent }} />
-               <div className="mt-12 pt-8 border-t border-slate-100 text-center"><p className="text-xs text-slate-400 font-medium mb-4">End of Chapter</p><button onClick={onBack} className="bg-slate-900 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-slate-800 transition-all active:scale-95">Complete & Close</button></div>
+
+           <div className="max-w-4xl mx-auto p-6 md:p-12">
+               <div 
+                   className="prose prose-slate max-w-none prose-img:rounded-3xl prose-headings:text-slate-900 prose-headings:font-black prose-a:text-blue-600 [&_a]:pointer-events-none [&_a]:cursor-text [&_a]:no-underline [&_iframe]:pointer-events-none prose-p:text-slate-600 prose-p:leading-loose"
+                   dangerouslySetInnerHTML={{ __html: decodedContent }}
+               />
+               
+               <div className="mt-16 pt-10 border-t border-slate-100 text-center">
+                   <p className="text-xs text-slate-300 font-black uppercase tracking-[0.2em] mb-6">End of Section</p>
+                   <button onClick={onBack} className="bg-slate-900 text-white font-bold py-4 px-12 rounded-[2rem] shadow-2xl hover:bg-slate-800 transition-all active:scale-95">
+                       Complete & Close
+                   </button>
+               </div>
            </div>
         </div>
       );
   }
 
-  // --- NOTES (MARKDOWN) RENDERER ---
+  // ==========================================
+  // 9. DEFAULT MARKDOWN RENDERER
+  // ==========================================
   return (
     <div className="bg-white min-h-screen pb-20 animate-in fade-in">
-       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 py-3 flex items-center justify-between shadow-sm">
-           <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:text-slate-900 transition-colors"><ArrowLeft size={20} /></button>
-           <div className="text-center"><h3 className="font-bold text-slate-800 text-sm leading-tight">{chapter.title}</h3><p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">{content.subtitle}</p></div>
+       <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-4 py-4 flex items-center justify-between shadow-sm">
+           <button onClick={onBack} className="p-2 -ml-2 text-slate-500 hover:text-slate-900 transition-colors">
+               <ArrowLeft size={22} />
+           </button>
+           <div className="text-center">
+               <h3 className="font-black text-slate-800 text-sm leading-tight uppercase tracking-tight">{chapter.title}</h3>
+               <p className="text-[9px] text-blue-500 font-bold uppercase tracking-widest mt-1">{content.subtitle || 'Study Material'}</p>
+           </div>
            <div className="w-8"></div>
        </div>
-       <div className="max-w-3xl mx-auto p-6 md:p-10">
-           <div className="prose prose-slate prose-headings:text-slate-800 prose-p:text-slate-600 prose-li:text-slate-600 prose-strong:text-slate-900 prose-a:text-blue-600 max-w-none">
-               <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} components={{
-                       h1: ({node, ...props}) => <h1 className="text-2xl font-black mb-4 pb-2 border-b border-slate-100" {...props} />,
-                       h2: ({node, ...props}) => <h2 className="text-xl font-bold mt-8 mb-4 text-blue-800 flex items-center gap-2" {...props} />,
-                       ul: ({node, ...props}) => <ul className="list-disc pl-5 space-y-2 my-4" {...props} />,
-                       li: ({node, ...props}) => <li className="pl-1" {...props} />,
-                       blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-blue-500 pl-4 py-2 my-6 bg-blue-50 rounded-r-lg italic text-blue-800" {...props} />,
-                       code: ({node, ...props}) => <code className="bg-slate-100 text-pink-600 px-1.5 py-0.5 rounded text-sm font-mono font-bold" {...props} />,
-                   }}>{content.content}</ReactMarkdown>
+
+       <div className="max-w-3xl mx-auto p-6 md:p-14">
+           <div className="prose prose-slate prose-lg max-w-none prose-headings:text-slate-900 prose-p:text-slate-600 prose-li:text-slate-600 prose-strong:text-slate-900 prose-a:text-blue-600">
+               <ReactMarkdown 
+                   remarkPlugins={[remarkMath]} 
+                   rehypePlugins={[rehypeKatex]}
+                   components={{
+                       h1: ({node, ...props}) => <h1 className="text-4xl font-black mb-8 pb-4 border-b-4 border-slate-100 leading-tight" {...props} />,
+                       h2: ({node, ...props}) => <h2 className="text-2xl font-black mt-12 mb-6 text-blue-800 flex items-center gap-3" {...props} />,
+                       ul: ({node, ...props}) => <ul className="list-disc pl-6 space-y-3 my-6 text-slate-700" {...props} />,
+                       li: ({node, ...props}) => <li className="pl-2 marker:text-blue-500 marker:font-bold" {...props} />,
+                       blockquote: ({node, ...props}) => <blockquote className="border-l-[6px] border-blue-500 pl-6 py-4 my-8 bg-blue-50/50 rounded-r-2xl italic text-blue-900 font-medium shadow-sm" {...props} />,
+                       code: ({node, ...props}) => <code className="bg-slate-100 text-pink-600 px-2 py-1 rounded-lg text-sm font-mono font-bold border border-slate-200" {...props} />,
+                   }}
+               >
+                   {content.content}
+               </ReactMarkdown>
            </div>
-           <div className="mt-12 pt-8 border-t border-slate-100 text-center"><p className="text-xs text-slate-400 font-medium mb-4">End of Chapter</p><button onClick={onBack} className="bg-slate-900 text-white font-bold py-3 px-8 rounded-full shadow-lg hover:bg-slate-800 transition-all active:scale-95">Complete & Close</button></div>
+           
+           <div className="mt-20 pt-12 border-t border-slate-100 text-center">
+               <div className="w-16 h-1 bg-slate-200 mx-auto rounded-full mb-8"></div>
+               <button onClick={onBack} className="bg-slate-900 text-white font-black py-5 px-16 rounded-[2.5rem] shadow-2xl hover:bg-blue-600 transition-all active:scale-95 flex items-center gap-3 mx-auto">
+                   <CheckCircle size={20} /> MARK AS COMPLETE
+               </button>
+           </div>
        </div>
     </div>
   );
